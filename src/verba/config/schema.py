@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from verba.models.translation import Lang
 
@@ -32,10 +32,28 @@ class HttpOptions(BaseModel):
     user_agent: str = "verba/0.1.0"
 
 
+class DesktopOptions(BaseModel):
+    """GUI behavior. GUI reads these; core never touches them."""
+
+    hotkey_selection: str = "Ctrl+Alt+D"
+    hotkey_input: str = "Ctrl+Alt+L"
+    default_target: Lang = Lang.ZH_HANS
+    popup_auto_close_ms: int = 8000
+    click_to_copy: bool = True
+
+    @field_validator("popup_auto_close_ms")
+    @classmethod
+    def _positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("popup_auto_close_ms must be positive")
+        return value
+
+
 class AppConfig(BaseModel):
     """Top-level configuration merged from defaults + file + environment."""
 
     default_target_lang: Lang = Lang.ZH_HANS
+    desktop: DesktopOptions = Field(default_factory=DesktopOptions)
     cache: CacheOptions = Field(default_factory=CacheOptions)
     http: HttpOptions = Field(default_factory=HttpOptions)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
