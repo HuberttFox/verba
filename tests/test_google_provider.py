@@ -88,3 +88,15 @@ def test_google_maps_zh_tw_detection() -> None:
     provider = GoogleFreeTranslator(ProviderConfig(), HttpClient(HttpOptions(), transport))
     result = provider.translate(TranslationRequest(text="world", target=Lang.ZH_HANS))
     assert result.detected_source == Lang.ZH_HANT
+
+
+def test_google_non_string_detected_raises_not_available() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = [[["你好", "hi", None, None]], None, 12345, None]
+        return httpx.Response(200, json=body)
+
+    transport = httpx.MockTransport(handler)
+    provider = GoogleFreeTranslator(ProviderConfig(), HttpClient(HttpOptions(), transport))
+    with pytest.raises(ProviderError) as exc:
+        provider.translate(TranslationRequest(text="hi", target=Lang.ZH_HANS))
+    assert isinstance(exc.value, ProviderNotAvailable)

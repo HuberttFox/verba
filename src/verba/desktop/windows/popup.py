@@ -9,7 +9,7 @@ from __future__ import annotations
 import html
 from collections.abc import Sequence
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -68,6 +68,7 @@ class ResultPopup(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setObjectName("verbaPopup")
         self._build_ui()
+        self._browser.installEventFilter(self)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -181,9 +182,21 @@ class ResultPopup(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self._options.click_to_copy and event.button() == Qt.MouseButton.LeftButton:
             child = self.childAt(event.position().toPoint())
-            if child is None or child is self:
+            if child is None or child is self or child is self._browser:
                 self.copy_translation()
         super().mousePressEvent(event)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            watched is self._browser
+            and self._options.click_to_copy
+            and event.type() == QEvent.Type.MouseButtonPress
+            and isinstance(event, QMouseEvent)
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self.copy_translation()
+            return True
+        return super().eventFilter(watched, event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.hide()

@@ -5,6 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtTest import QTest
 from pytestqt.qtbot import QtBot
 
 from verba.config.schema import DesktopOptions
@@ -82,6 +83,39 @@ def test_copy_timer_does_not_outlive_popup(qtbot: QtBot) -> None:
     popup.deleteLater()
     qtbot.wait(10)
     qtbot.wait(1300)
+
+
+def test_click_on_text_area_copies(qtbot: QtBot) -> None:
+    popup = ResultPopup(DesktopOptions())
+    qtbot.addWidget(popup)
+    popup.show_result(make_result(), QPoint(100, 100))
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.clipboard().clear()
+    QTest.mouseClick(popup._browser, Qt.MouseButton.LeftButton, pos=popup._browser.rect().center())
+    assert QApplication.clipboard().text() == "你好,世界"
+
+
+def test_click_on_pin_button_does_not_copy(qtbot: QtBot) -> None:
+    popup = ResultPopup(DesktopOptions())
+    qtbot.addWidget(popup)
+    popup.show_result(make_result(), QPoint(100, 100))
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.clipboard().clear()
+    QTest.mouseClick(popup._pin_button, Qt.MouseButton.LeftButton)
+    assert QApplication.clipboard().text() == ""
+
+
+def test_click_on_margin_copies(qtbot: QtBot) -> None:
+    popup = ResultPopup(DesktopOptions())
+    qtbot.addWidget(popup)
+    popup.show_result(make_result(), QPoint(100, 100))
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.clipboard().clear()
+    QTest.mouseClick(popup, Qt.MouseButton.LeftButton, pos=QPoint(1, 1))
+    assert QApplication.clipboard().text() == "你好,世界"
 
 
 class _WideContentPopup(ResultPopup):

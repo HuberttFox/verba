@@ -70,6 +70,8 @@ class GoogleFreeTranslator(BaseTranslator):
             parts.append(str(seg[0]))
         translated = "".join(parts)
         detected_raw = data[2] if len(data) > 2 else None
+        if detected_raw is not None and not isinstance(detected_raw, str):
+            raise ProviderNotAvailable("google: malformed response payload")
         detected = self._map_detected(detected_raw)
         return TranslationResult(
             text=translated,

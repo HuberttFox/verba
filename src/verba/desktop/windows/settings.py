@@ -48,9 +48,12 @@ class SettingsWindow(QWidget):
         self._target_lang = QComboBox()
         for lang in (Lang.ZH_HANS, Lang.ZH_HANT, Lang.EN, Lang.JA, Lang.KO, Lang.FR):
             self._target_lang.addItem(lang.value, lang)
-        self._target_lang.setCurrentIndex(
-            max(0, self._target_lang.findData(config.desktop.default_target))
-        )
+        index = self._target_lang.findData(config.desktop.default_target)
+        if index < 0:
+            lang = config.desktop.default_target
+            self._target_lang.addItem(lang.value, lang)
+            index = self._target_lang.count() - 1
+        self._target_lang.setCurrentIndex(index)
 
         form.addRow("划词热键", self._selection_hotkey)
         form.addRow("输入热键", self._input_hotkey)

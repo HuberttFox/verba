@@ -78,3 +78,21 @@ def test_settings_save_rebinds_hotkeys(qtbot: QtBot, tmp_path: Path, monkeypatch
     window.set_hotkey_selection_text("Ctrl+Shift+Z")
     assert window.save() is True
     assert (HOTKEY_SELECTION_ID, parse_hotkey("Ctrl+Shift+Z")) in calls
+
+
+def test_settings_preserves_lang_outside_dropdown(
+    qtbot: QtBot, tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from verba.config import loader
+    from verba.models.translation import Lang
+
+    monkeypatch.setattr(loader, "user_config_path", lambda: tmp_path / "config.toml")
+    config = AppConfig(desktop=DesktopOptions(default_target=Lang.RU))
+    window = SettingsWindow(config, HotkeyManager())
+    qtbot.addWidget(window)
+    assert window._target_lang.currentData() == Lang.RU
+    assert window.save() is True
+    saved = tomllib.loads((tmp_path / "config.toml").read_text("utf-8"))
+    assert saved["desktop"]["default_target"] == "ru"
+    assert saved["desktop"]["hotkey_selection"] == "Ctrl+Alt+D"
+    assert saved["desktop"]["click_to_copy"] is True
