@@ -1,7 +1,8 @@
 # verba 桌面化(第二阶段):Windows 划词 + 输入翻译 设计
 
 日期:2026-08-01
-状态:已批准(2026-08-01 会话确认)
+状态:已批准(2026-08-01 会话确认;同日审查修订:错误类名、剪贴板立即恢复、
+浮窗关闭机制 Qt.Popup、输入窗职责、UAC 限制、mypy spike)
 
 ## 背景
 
@@ -34,8 +35,11 @@ hover 操作按钮、失去焦点自动关闭。
 - **全局热键**:ctypes `RegisterHotKey` + `QAbstractNativeEventFilter`。
   回调直接发生在 Qt 主线程(零额外线程、零第三方依赖),且热键触发
   不抢焦点。
-- **划词捕获**:热键触发后 `SendInput` 模拟 Ctrl+C,轮询剪贴板变化
-  (上限 1s,锁冲突重试),翻译完成后**恢复原剪贴板内容**。
+- **划词捕获**:热键触发后 `SendInput` 模拟 Ctrl+C,轮询剪贴板变化,
+  **捕获成功后立即恢复原剪贴板内容**(不等翻译完成,避免覆盖翻译期间
+  用户新复制的内容);译文经点击复制/按钮进剪贴板。
+- **UAC 限制(已知,不解决)**:目标应用以管理员权限运行时,非提升进程的
+  `SendInput` 静默失败 → 划词无结果。文档标注,不做提权规避。
 - **线程模型**:热键回调/输入窗提交 → Qt 主线程 → Worker QThread 跑阻塞
   `pipeline.run()` → 完成信号回主线程渲染。UI 渲染不走 EventBus 派发,
   走 Qt signal,规避跨线程 widget 访问。EventBus 保留给非 UI 消费者
@@ -62,7 +66,7 @@ flowchart LR
 | `hotkeys.py` | `RegisterHotKey` 注册/注销,热键字符串解析,Qt 事件过滤 |
 | `workers.py` | `PipelineWorker(QThread)` 执行阻塞 pipeline,发完成/失败 signal |
 | `windows/popup.py` | `ResultPopup`:Bob 风格结果浮窗 |
-| `windows/inputbox.py` | `InputWindow`:输入翻译窗(输入区+结果区) |
+| `windows/inputbox.py` | `InputWindow`:**输入专用**小窗(仅输入框),结果一律走 popup |
 | `windows/settings.py` | 设置页(热键/默认 provider/目标语言) |
 | `outputs/popup_handler.py` | `QPopupOutputHandler(OutputHandler)` 渲染结果进浮窗 |
 | `outputs/tray.py` | `TrayOutputHandler` + 托盘菜单(翻译/输入/设置/退出) |
@@ -73,23 +77,28 @@ flowchart LR
 
 ## 浮窗 UX(ResultPopup)
 
-- 窗口标志:`Qt.FramelessWindowHint | WindowStaysOnTopHint | Tool`;
-  `WA_TranslucentBackground` + 圆角背景
+- 窗口标志:`Qt.Popup | FramelessWindowHint`(`WA_TranslucentBackground` +
+  圆角背景)。`Qt.Popup` 自带点击外部关闭 + Esc 关闭,**无需额外鼠标钩子**
+  (窗口层约束:Popup 与 Tool 择一,不用 Tool)。
+- **固定(pin)状态**:`setWindowFlags` 切换为
+  `Qt.Tool | WindowStaysOnTopHint` 后重新 show —— 点击外部不再关闭、
+  不超时;取消固定切回 Popup 标志
 - QTextBrowser 只读,HTML 渲染:原文灰色小字在上,译文正文在下
 - 定位:鼠标附近(`QCursor.pos()`),多屏按 `QScreen` 可视区 clamp;
-  输入翻译场景显示在输入窗下方
+  输入翻译场景显示在输入窗正下方
 - 点击浮窗任意处 = 复制译文到剪贴板
 - hover 显示按钮行:复制 / 固定 / 关闭
 - 关闭:Esc、点击外部、超时(默认 8s);固定后不超时自动关闭
 
 ## 划词流程(SelectionInputSource)
 
-1. 热键触发(不抢焦点)→ `SendInput` Ctrl 按下+释放
-2. 先保存原剪贴板内容
-3. 轮询剪贴板直到内容变化(上限 1s;clipboard 锁冲突重试)
-4. 新文本非空 → 翻译
-5. 完成后恢复原剪贴板内容
-6. 空文本/纯空白 → 忽略,不出浮窗
+1. 热键触发(不抢焦点)→ 先保存原剪贴板完整内容(`QMimeData`,
+   含图片等非文本格式)
+2. `SendInput` Ctrl 按下+释放 → 轮询剪贴板变化(锁冲突重试,
+   总窗口 ~1s;超时后整体重试一次模拟复制,仍无变化才判定失败)
+3. 捕获到新文本 → **立即恢复原剪贴板完整内容**(不等翻译完成)
+4. 非空文本 → 翻译;译文经用户点击复制才进剪贴板
+5. 空文本/纯空白/两次重试无变化 → 忽略,不出浮窗
 
 ## Providers
 
@@ -116,16 +125,25 @@ click_to_copy = true
 ## 错误处理
 
 - 热键注册失败(冲突)→ 托盘通知 + 设置页提示
-- pipeline 异常 → `PipelineFailed` → 浮窗内显示错误类型对应提示语
-  (ProviderError 层次已存在:NotAvailable/QuotaExceeded/NetworkError/HttpError)
+- pipeline 异常 → `PipelineFailed` → 浮窗内显示错误提示。UI 映射两类
+  独立错误树,分别捕获:
+  - `ProviderError` 层次:`ProviderNotAvailable`(缺凭据/端点坏)、
+    `QuotaExceeded`、`NetworkError`(transport 失败)
+  - `HttpError`(utils/http.py,**独立于 ProviderError**,不继承)—— 携带
+    `status_code`,UI 按状态码显示("HTTP 429 限流"等)
 - 剪贴板锁冲突 → 重试,超时给出提示
+- 设置页修改热键 → `UnregisterHotKey` 旧键 + 注册新键,失败回滚并提示
+- 二次启动实例 → 热键注册失败路径覆盖,提示已在运行
 
 ## 测试与验证
 
 - 现有 24 测试保持绿;mypy strict 保持(desktop 层也要过 strict)
+- **PySide6 + mypy strict spike(M1 第一步)**:预研 Qt 信号重载/隐式转换
+  在 strict 下的处理;定策略(允许 `# type: ignore` 的有限清单或 per-file
+  例外),避免后续卡壳
 - 新增单测(无头,不需要真实显示器):
   - 热键字符串解析(`"Ctrl+Alt+D"` → 修饰键+虚拟键码)
-  - 剪贴板保存/恢复逻辑
+  - 剪贴板保存/恢复逻辑(含非文本格式)
   - 浮窗定位纯函数(鼠标点 + 多屏几何 → 目标矩形,含 clamp)
   - Google/DeepL/Baidu provider 请求构造与响应解析
     (httpx `MockTransport`)
