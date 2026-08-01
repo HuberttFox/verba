@@ -1394,7 +1394,7 @@ git commit -m "feat: selection capture with immediate clipboard restore"
   - `class TrayOutputHandler(QSystemTrayIcon)`:信号 `action_translate = Signal()`, `action_input = Signal()`, `action_settings = Signal()`, `action_quit = Signal()`
   - `def select_default_provider(registry: ServiceRegistry[BaseTranslator], priority: list[str]) -> str`:返回 priority 中第一个 `is_available()` 的 provider 名;全不可用返回 priority[0]
   - `def describe_error(exc: BaseException) -> str`:按错误树映射中文提示:`ProviderNotAvailable`→"服务不可用(缺少凭据?)"、`QuotaExceeded`→"请求超限,请稍后再试"、`NetworkError`→"网络错误,请检查连接"、`HttpError`→"HTTP {status_code}: {message}"(utils/http.py:14,独立错误树)、其余→str(exc)
-  - `class VerbaApp(QObject)`:构造 `VerbaApp(config: AppConfig) -> None`(**普通 QObject,不继承 QApplication** —— 测试复用 pytest-qt 的 QApplication,避免双实例崩溃);公开属性 `popup`/`input_window`/`tray`/`worker`/`hotkeys`/`selection_capturer`;方法 `_run_selection()`、`_open_input()`
+  - `class VerbaApp(QObject)`:构造 `VerbaApp(config: AppConfig) -> None`(**普通 QObject,不继承 QApplication** —— 测试复用 pytest-qt 的 QApplication,避免双实例崩溃);公开属性 `popup`/`input_window`/`tray`/`worker`/`hotkeys`/`selection_capturer`;方法 `_run_selection()`、`_open_input()`、`_bind_hotkeys_safe()`(启动/重绑路径,HotkeyError 不崩溃 → 禁用热键 + 托盘气泡)
   - `def create_app(config: AppConfig) -> VerbaApp`;`def main(argv: list[str] | None = None) -> int`(创建 QApplication + VerbaApp + exec)
   - 划词动作:`PipelineAction(name="selection", input_source="selection", translator_provider=..., target_lang=config.desktop.default_target)`
   - **渲染路径**:pipeline 内 `OutputHub` 不注册 GUI handler(防 worker 线程跨线程操作 widget);worker `finished_ok` → 主线程 `popup.show_result(...)`
@@ -1476,6 +1476,36 @@ def test_app_input_flows_to_popup(qtbot) -> None:
     app.input_window.submit()
     qtbot.waitUntil(lambda: app.popup.isVisible(), timeout=3000)
     assert "你好" in app.popup.toPlainText()
+
+
+def test_app_survives_hotkey_conflict(qtbot, monkeypatch) -> None:
+    from verba.desktop.hotkeys import HotkeyError, HotkeySpec
+
+    def broken_bind(self, hotkey_id: int, spec: HotkeySpec) -> None:
+        raise HotkeyError("RegisterHotKey failed for id=1 (in use?)")
+
+    monkeypatch.setattr("verba.desktop.app.HotkeyManager.bind", broken_bind)
+    app = VerbaApp(AppConfig())  # 不得抛异常
+    qtbot.addWidget(app.popup)
+    assert app.tray is not None
+
+
+def test_app_hotkey_conflict_shows_tray_message(qtbot, monkeypatch) -> None:
+    from verba.desktop.hotkeys import HotkeyError, HotkeySpec
+
+    def broken_bind(self, hotkey_id: int, spec: HotkeySpec) -> None:
+        raise HotkeyError("RegisterHotKey failed for id=1 (in use?)")
+
+    monkeypatch.setattr("verba.desktop.app.HotkeyManager.bind", broken_bind)
+    messages: list[str] = []
+
+    def fake_show_message(self, title: str, body: str, icon=None, ms: int = 0) -> None:
+        messages.append(body)
+
+    monkeypatch.setattr("verba.desktop.app.TrayOutputHandler.showMessage", fake_show_message)
+    app = VerbaApp(AppConfig())
+    qtbot.addWidget(app.popup)
+    assert any("热键注册失败" in m for m in messages)
 ```
 
 (离线环境 `QSystemTrayIcon.isVisible()` 恒 False(offscreen 无系统托盘),故断言 contextMenu 存在;`isVisible` 断言仅真机清单。)`
@@ -1549,12 +1579,14 @@ from verba.core.registry import ServiceRegistry
 from verba.desktop.hotkeys import (
     HOTKEY_INPUT_ID,
     HOTKEY_SELECTION_ID,
+    HotkeyError,
     HotkeyManager,
     create_hotkey_manager,
     parse_hotkey,
 )
 from verba.desktop.inputs.manual import ManualInputSource
 from verba.desktop.inputs.selection import SelectionCapturer, SelectionInputSource
+from verba.desktop.outputs.popup_handler import QPopupOutputHandler
 from verba.desktop.outputs.tray import TrayOutputHandler
 from verba.desktop.workers import PipelineWorker
 from verba.desktop.windows.inputbox import InputWindow
@@ -1632,7 +1664,7 @@ class VerbaApp(QObject):
         self.worker.failed.connect(self._on_worker_failed)
 
         self.hotkeys = create_hotkey_manager(self)
-        self._bind_hotkeys()
+        self.hotkeys.hotkey_triggered.connect(self._on_hotkey)  # 只连一次,reload 不重复
 
         self.tray = TrayOutputHandler(self)
         self.tray.action_translate.connect(self._run_selection)
@@ -1640,8 +1672,14 @@ class VerbaApp(QObject):
         self.tray.action_settings.connect(self._on_tray_settings)
         self.tray.action_quit.connect(QApplication.instance().quit)
 
+        self._bind_hotkeys_safe()  # tray 已建,冲突提示才能发气泡
+
         self.selection_capturer.captured.connect(self._on_selection_captured)
         self.input_window.submitted.connect(self._on_input_submitted)
+
+        self._popup_handler = QPopupOutputHandler(
+            self.popup, get_anchor=self.cursor_pos, get_original=lambda: self._last_original
+        )
 
     # -- wiring ---------------------------------------------------------------
 
@@ -1653,6 +1691,7 @@ class VerbaApp(QObject):
         return registry
 
     def _bind_hotkeys(self) -> None:
+        """Unbind-then-bind both hotkeys. Caller handles HotkeyError."""
         self.hotkeys.unbind(HOTKEY_SELECTION_ID)
         self.hotkeys.unbind(HOTKEY_INPUT_ID)
         self.hotkeys.bind(
@@ -1661,7 +1700,15 @@ class VerbaApp(QObject):
         self.hotkeys.bind(
             HOTKEY_INPUT_ID, parse_hotkey(self._config.desktop.hotkey_input)
         )
-        self.hotkeys.hotkey_triggered.connect(self._on_hotkey)
+
+    def _bind_hotkeys_safe(self) -> None:
+        """Startup/rebind path: on conflict, disable the hotkey + tray notice."""
+        try:
+            self._bind_hotkeys()
+        except HotkeyError as exc:
+            self.hotkeys.unbind(HOTKEY_SELECTION_ID)
+            self.hotkeys.unbind(HOTKEY_INPUT_ID)
+            self.tray.showMessage("verba", f"热键注册失败: {exc}", TrayOutputHandler.MessageIcon.Warning, 3000)
 
     def _on_hotkey(self, hotkey_id: int) -> None:
         if hotkey_id == HOTKEY_SELECTION_ID:
@@ -1685,6 +1732,9 @@ class VerbaApp(QObject):
         self._last_original = text
         self._submit_translation(self._selection_action())
 
+    def _submit_translation(self, action: PipelineAction) -> None:
+        self.worker.submit(action, text=self._last_original)
+
     def _on_input_submitted(self, text: str) -> None:
         self._last_original = text
         action = PipelineAction(
@@ -1706,9 +1756,7 @@ class VerbaApp(QObject):
         return select_default_provider(self.translators, PROVIDER_PRIORITY)
 
     def _on_worker_ok(self, result) -> None:
-        self.popup.show_result(
-            result, self.cursor_pos(), original=self._last_original
-        )
+        self._popup_handler.present(result)
         self._last_original = None
 
     def _on_worker_failed(self, action_name: str, exc: BaseException) -> None:
@@ -1724,7 +1772,7 @@ class VerbaApp(QObject):
 
     def _reload_config(self, config: AppConfig) -> None:
         self._config = config
-        self._bind_hotkeys()
+        self._bind_hotkeys_safe()
 
 
 def create_app(config: AppConfig) -> VerbaApp:
@@ -1734,6 +1782,7 @@ def create_app(config: AppConfig) -> VerbaApp:
 def main(argv: list[str] | None = None) -> int:
     setup_logging(logging.INFO)
     app = QApplication(argv if argv is not None else sys.argv)
+    app.setQuitOnLastWindowClosed(False)  # 关设置窗不退出;托盘退出是唯一出口
     verba = create_app(load_config())
     verba.tray.show()
     return app.exec()
@@ -1741,13 +1790,17 @@ def main(argv: list[str] | None = None) -> int:
 
 注意:
 - `QApplication.instance().quit` 在测试里不可用(无实例退出语义)—— 托盘 quit 信号在测试中不触发,安全
-- `_bind_hotkeys` 每次先 unbind 再 bind,支持设置页重绑(回滚见 Task 10)
+- `hotkey_triggered.connect` 只发生在 `__init__` 一次,`_bind_hotkeys` 只管 unbind/bind,设置保存不会重复连接
+- 启动与设置保存共用 `_bind_hotkeys_safe`:热键冲突不崩溃,禁用热键 + 托盘气泡提示
+- `_on_worker_ok` 委托 `QPopupOutputHandler.present`(Task 5 产物挂载于此,消除死代码)
+- `_open_input` 浮窗定位用 `cursor_pos()`(鼠标处),与 spec 的"输入窗正下方"有偏差 —— 已知简化,真机清单观察后迭代
 - `cursor_pos()` 暴露为公开方法便于测试 monkeypatch
+- import 补 `HotkeyError`(hotkeys.py)与 `QPopupOutputHandler`(outputs.popup_handler)
 
 - [ ] **Step 4: 跑测试验证通过**
 
 Run: `uv run pytest tests/desktop/test_app.py -v`
-Expected: PASS (6 passed)
+Expected: PASS (8 passed)
 
 - [ ] **Step 5: 回归 + 提交**
 
@@ -1822,6 +1875,17 @@ def test_google_translate_http_error() -> None:
     with pytest.raises(Exception) as exc:
         provider.translate(TranslationRequest(text="x", target=Lang.ZH_HANS))
     assert isinstance(exc.value, httpx.HTTPStatusError) or "503" in str(exc.value)
+
+
+def test_google_maps_zh_tw_detection() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = [[["世界", "world", None, None]], None, "zh-TW", None]
+        return httpx.Response(200, json=body)
+
+    transport = httpx.MockTransport(handler)
+    provider = GoogleFreeTranslator(ProviderConfig(), HttpClient(HttpOptions(), transport))
+    result = provider.translate(TranslationRequest(text="world", target=Lang.ZH_HANS))
+    assert result.detected_source == Lang.ZH_HANT
 ```
 
 - [ ] **Step 2: 跑测试验证失败**
@@ -1954,13 +2018,15 @@ class GoogleFreeTranslator(BaseTranslator):
         code = raw.lower()
         if code == "zh-cn":
             return Lang.ZH_HANS
+        if code == "zh-tw":
+            return Lang.ZH_HANT
         for lang in Lang:
-            if lang != Lang.AUTO and (lang.value.lower() == code or code == "zh-cn"):
+            if lang != Lang.AUTO and lang.value.lower() == code:
                 return lang
         return None
 ```
 
-`_map_detected` 说明:zh-CN→ZH_HANS,zh-TW→ZH_HANT;其余按 code 小写匹配 Lang.value。上面循环版即可,注意 "zh-cn" 单独处理防止撞 Lang.ZH_HANT。若 mypy 对 `data[0]` 报 Any,translate 里已用 `parts: list[str]` + `str(seg[0])` 收敛。
+`_map_detected` 说明:zh-CN→ZH_HANS、zh-TW→ZH_HANT 单独处理(Google 代码 "zh-TW" ≠ Lang.ZH_HANT.value "zh-Hant"),其余按 code 小写匹配 Lang.value。若 mypy 对 `data[0]` 报 Any,translate 里已用 `parts: list[str]` + `str(seg[0])` 收敛。
 
 `src/verba/desktop/app.py` 的 `_build_translators` 注册 google(Task 7 只注册 echo):
 
@@ -1983,7 +2049,7 @@ import 加 `from verba.config.schema import AppConfig, ProviderConfig`(ProviderC
 - [ ] **Step 4: 跑测试验证通过**
 
 Run: `uv run pytest tests/test_google_provider.py -v`
-Expected: PASS (3 passed)
+Expected: PASS (4 passed)
 
 - [ ] **Step 5: 回归 + 提交**
 
@@ -2053,6 +2119,19 @@ def test_deepl_translate() -> None:
     assert result.detected_source == Lang.EN
 
 
+def test_deepl_maps_zh_detection() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"translations": [{"detected_source_language": "ZH", "text": "hi"}]},
+        )
+
+    transport = httpx.MockTransport(handler)
+    provider = DeepLTranslator(ProviderConfig(api_key=SecretStr("secret")), HttpClient(HttpOptions(), transport))
+    result = provider.translate(TranslationRequest(text="你好", target=Lang.EN))
+    assert result.detected_source == Lang.ZH_HANS
+
+
 def test_baidu_target_code() -> None:
     assert baidu_target_code(Lang.ZH_HANS) == "zh"
     assert baidu_target_code(Lang.EN) == "en"
@@ -2120,6 +2199,19 @@ def deepl_target_code(lang: Lang) -> str:
     return lang.value.upper()
 
 
+# DeepL 返回大写代码,且简繁不分(一律 "ZH" -> 简体)
+_DETECTED_MAP: dict[str, Lang] = {
+    lang.value.upper(): lang for lang in Lang if lang != Lang.AUTO
+}
+_DETECTED_MAP["ZH"] = Lang.ZH_HANS
+
+
+def map_detected(raw: str | None) -> Lang | None:
+    if not raw:
+        return None
+    return _DETECTED_MAP.get(raw.upper())
+
+
 class DeepLTranslator(BaseTranslator):
     meta = ProviderMeta(
         name="deepl", version="0.1.0", capabilities=frozenset({"translate"})
@@ -2153,8 +2245,7 @@ class DeepLTranslator(BaseTranslator):
         )
         entries = data["translations"]
         first = entries[0]
-        detected_raw = first.get("detected_source_language")
-        detected = Lang(detected_raw.lower()) if detected_raw else None
+        detected = map_detected(first.get("detected_source_language"))
         return TranslationResult(
             text=first["text"],
             source=request.source,
@@ -2280,7 +2371,7 @@ class BaiduTranslator(BaseTranslator):
 - [ ] **Step 4: 跑测试验证通过**
 
 Run: `uv run pytest tests/test_remote_providers.py -v`
-Expected: PASS (6 passed)
+Expected: PASS (7 passed)
 
 - [ ] **Step 5: 回归 + 提交**
 
@@ -2298,6 +2389,7 @@ git commit -m "feat: deepl and baidu providers"
 
 **Files:**
 - Create: `src/verba/desktop/windows/settings.py`
+- Modify: `pyproject.toml`(加 `tomli-w` 运行时依赖,TOML 写回需要)
 - Test: `tests/desktop/test_settings.py`(新建)
 
 **Interfaces:**
@@ -2349,6 +2441,23 @@ def test_settings_save_emits_and_writes_toml(qtbot, tmp_path: Path, monkeypatch)
     with qtbot.waitSignal(window.config_changed, timeout=1000) as blocker:
         assert window.save() is True
     saved = tomllib.loads((tmp_path / "config.toml").read_text("utf-8"))
+    assert saved["desktop"]["hotkey_selection"] == "Ctrl+Shift+Y"
+
+
+def test_settings_save_preserves_other_sections(qtbot, tmp_path: Path, monkeypatch) -> None:
+    from verba.config import loader
+
+    target = tmp_path / "config.toml"
+    target.write_text(
+        '[providers]\n[providers.deepl]\nenabled = true\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(loader, "user_config_path", lambda: target)
+    window = SettingsWindow(AppConfig(), HotkeyManager())
+    qtbot.addWidget(window)
+    window.set_hotkey_selection_text("Ctrl+Shift+Y")
+    assert window.save() is True
+    saved = tomllib.loads(target.read_text("utf-8"))
+    assert saved["providers"]["deepl"]["enabled"] is True
     assert saved["desktop"]["hotkey_selection"] == "Ctrl+Shift+Y"
 
 
@@ -2489,25 +2598,32 @@ class SettingsWindow(QWidget):
 
     @staticmethod
     def _write_toml(config: AppConfig) -> None:
+        """Merge the desktop section into the existing TOML (never clobber)."""
         path: Path = user_config_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f'[desktop]\n'
-            f'hotkey_selection = "{config.desktop.hotkey_selection}"\n'
-            f'hotkey_input = "{config.desktop.hotkey_input}"\n'
-            f'default_target = "{config.desktop.default_target.value}"\n'
-            f'popup_auto_close_ms = {config.desktop.popup_auto_close_ms}\n'
-            f'click_to_copy = {"true" if config.desktop.click_to_copy else "false"}\n',
-            encoding="utf-8",
-        )
+        existing: dict[str, Any] = {}
+        if path.is_file():
+            with path.open("rb") as fh:
+                existing = tomllib.load(fh)
+        existing["desktop"] = {
+            "hotkey_selection": config.desktop.hotkey_selection,
+            "hotkey_input": config.desktop.hotkey_input,
+            "default_target": config.desktop.default_target.value,
+            "popup_auto_close_ms": config.desktop.popup_auto_close_ms,
+            "click_to_copy": config.desktop.click_to_copy,
+        }
+        with path.open("wb") as fh:
+            tomli_w.dump(existing, fh)
 ```
+
+import 加:`import tomllib`、`from typing import Any`、`import tomli_w`;`pyproject.toml` dependencies 加 `"tomli-w>=1.0"` 并 `uv sync`。
 
 (provider 选择不在设置页暴露:默认 provider 由 `select_default_provider` 按 PROVIDER_PRIORITY + `is_available()` 自动决定,设置页仅管理热键与目标语言。)
 
 - [ ] **Step 4: 跑测试验证通过**
 
-Run: `uv run pytest tests/desktop/test_settings.py -v`
-Expected: PASS (4 passed)
+Run: `uv sync` 然后 `uv run pytest tests/desktop/test_settings.py -v`
+Expected: PASS (5 passed)
 
 - [ ] **Step 5: 回归 + 提交**
 
@@ -2515,7 +2631,7 @@ Run: `uv run pytest && uv run mypy`
 Expected: 全绿
 
 ```bash
-git add src/verba/desktop/windows/settings.py tests/desktop/test_settings.py
+git add src/verba/desktop/windows/settings.py tests/desktop/test_settings.py pyproject.toml uv.lock
 git commit -m "feat: settings window with hotkey rebind"
 ```
 
@@ -2589,7 +2705,7 @@ git commit -m "docs: windows verification checklist and desktop quickstart"
 
 ## 里程碑映射
 
-- **M1(desktop 骨架+输入翻译)**:Task 1-5,7
-- **M2(划词)**:Task 6
-- **M3(真实服务+设置页)**:Task 8,9,10
+- **M1(骨架 + 输入翻译 + 划词全链路)**:Task 1-7(Task 7 装配依赖 Task 6 划词模块,故 M1 含 6)
+- **M2(真实服务)**:Task 8-9
+- **M3(设置页 + 文档)**:Task 10-11
 - **验证**:Task 11(Windows 真机手动)
