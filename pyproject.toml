@@ -1,0 +1,36 @@
+[project]
+name = "verba"
+version = "0.1.0"
+description = "A UI-agnostic plugin framework for building Bob/Pot-style translation & OCR desktop tools"
+authors = [
+    { name = "hubert", email = "hubertfox@foxmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "platformdirs>=4.2",
+    "pyperclip>=1.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.10",
+    "types-pyperclip>=1.0",
+]
+
+[project.scripts]
+verba = "verba.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.25,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
