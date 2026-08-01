@@ -73,10 +73,16 @@ class _QtClipboard(ClipboardGateway):
         mime = self._clip.mimeData()
         if mime is None:
             return QMimeData()
-        return QMimeData(mime)  # type: ignore[call-arg]  # Qt copy ctor; stubs miss it
+        out = QMimeData()
+        for fmt in mime.formats():  # manual copy: QMimeData(m) ctor yields an empty shell
+            out.setData(fmt, mime.data(fmt))
+        return out
 
     def set_mime(self, mime: QMimeData) -> None:
-        self._clip.setMimeData(QMimeData(mime))  # type: ignore[call-arg]  # Qt copy ctor; stubs miss it
+        out = QMimeData()
+        for fmt in mime.formats():  # manual copy: QMimeData(m) ctor yields an empty shell
+            out.setData(fmt, mime.data(fmt))
+        self._clip.setMimeData(out)
 
 
 class SelectionCapturer(QObject):
@@ -114,16 +120,19 @@ class SelectionCapturer(QObject):
     def _attempt(self) -> None:
         try:
             self._send()
-        except ProviderError:
-            self._finish_restore()
-            self.nothing.emit()
+        except Exception:
+            self._fail()
             return
         self._elapsed = 0
         self._timer.start()
 
     def _poll(self) -> None:
         self._elapsed += self._poll_interval_ms
-        text = self._clip.text()
+        try:
+            text = self._clip.text()
+        except Exception:
+            self._fail()
+            return
         if text and text.strip() and text != self._original_text():
             self._finish_restore()
             self.captured.emit(text)
@@ -139,6 +148,10 @@ class SelectionCapturer(QObject):
 
     def _original_text(self) -> str:
         return self._original.text() if self._original is not None else ""
+
+    def _fail(self) -> None:
+        self._finish_restore()
+        self.nothing.emit()
 
     def _finish_restore(self) -> None:
         self._timer.stop()

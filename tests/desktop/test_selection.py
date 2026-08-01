@@ -8,6 +8,7 @@ from PySide6.QtCore import QMimeData
 from pytestqt.qtbot import QtBot
 
 from verba.desktop.inputs.selection import (
+    _QtClipboard,
     ClipboardGateway,
     SelectionCapturer,
     SelectionInputSource,
@@ -96,3 +97,38 @@ def test_selection_source_wraps_capturer(qtbot: QtBot) -> None:
     payload = source.capture()
     assert payload.kind == "text"
     assert payload.text == "selected text"
+
+
+def test_capturer_restores_on_unexpected_error(qtbot: QtBot) -> None:
+    class BoomClipboard(FakeClipboard):
+        def text(self) -> str:
+            raise RuntimeError("boom")
+
+    fake = BoomClipboard()
+    capturer, _ = make_capturer(fake)
+    with qtbot.waitSignal(capturer.nothing, timeout=3000):
+        capturer.start()
+    assert fake.restored
+
+
+def test_qt_clipboard_roundtrip_preserves_mime(qtbot: QtBot) -> None:
+    from PySide6.QtWidgets import QApplication
+
+    source = QMimeData()
+    source.setText("hello")
+    source.setHtml("<b>hello</b>")
+    expected_formats = set(source.formats())
+    QApplication.clipboard().setMimeData(source)
+
+    gateway = _QtClipboard()
+    copied = gateway.mime_data()
+    assert copied.text() == "hello"
+    assert copied.html() == "<b>hello</b>"
+    assert set(copied.formats()) == expected_formats
+
+    gateway.set_mime(copied)
+    restored = QApplication.clipboard().mimeData()
+    assert restored is not None
+    assert restored.text() == "hello"
+    assert restored.html() == "<b>hello</b>"
+    assert set(restored.formats()) == expected_formats

@@ -79,7 +79,8 @@ def test_copy_timer_does_not_outlive_popup(qtbot: QtBot) -> None:
     qtbot.addWidget(popup)
     popup.show_result(make_result(), QPoint(100, 100))
     popup.copy_translation()
-    popup.close()
+    popup.deleteLater()
+    qtbot.wait(10)
     qtbot.wait(1300)
 
 
