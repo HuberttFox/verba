@@ -12,3 +12,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Packaging regenerable artifacts
+packaging/venv/
+packaging/work/
+packaging/dist/
