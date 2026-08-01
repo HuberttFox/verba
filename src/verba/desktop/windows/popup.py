@@ -121,7 +121,7 @@ class ResultPopup(QWidget):
 
     def show_anchor(self, anchor: QPoint) -> None:
         self.adjustSize()
-        size = QSize(max(self.width(), 320), max(self.height(), 140))
+        size = QSize(min(max(self.width(), 320), 400), max(self.height(), 140))
         screens = [s.geometry() for s in QGuiApplication.screens()]
         rect = popup_rect(anchor, size, screens)
         self.setGeometry(rect)

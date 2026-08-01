@@ -64,6 +64,21 @@ def test_popup_renders_result_and_copies(qtbot: QtBot) -> None:
     assert clip == "你好,世界"
 
 
+class _WideContentPopup(ResultPopup):
+    """Simulates content forcing a wider-than-cap layout (offscreen-safe)."""
+
+    def adjustSize(self) -> None:
+        self.resize(600, 200)
+
+
+def test_popup_width_capped_at_400(qtbot: QtBot) -> None:
+    popup = _WideContentPopup(DesktopOptions())
+    qtbot.addWidget(popup)
+    popup.show_anchor(QPoint(100, 100))
+    assert popup.width() <= 400
+    assert popup.width() >= 320
+
+
 def test_popup_pin_disables_auto_close(qtbot: QtBot) -> None:
     opts = DesktopOptions(popup_auto_close_ms=100)
     popup = ResultPopup(opts)
