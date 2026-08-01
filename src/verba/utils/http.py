@@ -27,13 +27,18 @@ class HttpClient:
     it from their factory instead of creating raw httpx clients.
     """
 
-    def __init__(self, options: HttpOptions | None = None) -> None:
+    def __init__(
+        self,
+        options: HttpOptions | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
         opts = options or HttpOptions()
         self._options = opts
         self._client = httpx.Client(
             timeout=opts.timeout,
             headers={"User-Agent": opts.user_agent},
             follow_redirects=True,
+            transport=transport,
         )
 
     def post_json(
@@ -58,6 +63,26 @@ class HttpClient:
         return self._send(
             lambda: self._client.get(url, headers=headers, params=params)
         )
+
+    def get_json_any(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        params: dict[str, str] | None = None,
+    ) -> Any:
+        """Like get_json but accepts any JSON shape (arrays, scalars).
+
+        Google's free endpoint returns a top-level array, which the
+        ``isinstance(data, dict)`` check in get_json would reject.
+        """
+        try:
+            response = self._client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise self._map_error(exc) from exc
+        except httpx.HTTPError as exc:
+            raise NetworkError(str(exc)) from exc
+        return response.json()
 
     def stream_sse(
         self,

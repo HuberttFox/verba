@@ -6,15 +6,18 @@ from verba.providers.errors import (
     ProviderNotAvailable,
     QuotaExceeded,
 )
+from verba.providers.google import GoogleFreeTranslator, google_target_code
 
 __all__ = [
     "BaseOCR",
     "BaseTranslator",
     "EchoOCR",
     "EchoTranslator",
+    "GoogleFreeTranslator",
     "NetworkError",
     "ProviderError",
     "ProviderMeta",
     "ProviderNotAvailable",
     "QuotaExceeded",
+    "google_target_code",
 ]

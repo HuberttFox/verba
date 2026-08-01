@@ -14,7 +14,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
 from verba.config.loader import load_config
-from verba.config.schema import AppConfig
+from verba.config.schema import AppConfig, ProviderConfig
 from verba.core.pipeline import Pipeline, PipelineAction
 from verba.core.registry import ServiceRegistry
 from verba.desktop.hotkeys import (
@@ -128,10 +128,15 @@ class VerbaApp(QObject):
     # -- wiring ---------------------------------------------------------------
 
     def _build_translators(self) -> ServiceRegistry[BaseTranslator]:
+        from verba.providers.google import GoogleFreeTranslator
+        from verba.utils.http import HttpClient
+
         registry: ServiceRegistry[BaseTranslator] = ServiceRegistry()
         registry.register("echo", EchoTranslator())
-        # Task 8/9 在此追加:google / deepl / baidu 真实 provider,
-        # 按 config.providers 的 enabled/api_key 条件注册。
+        http = HttpClient(self._config.http)
+        google_cfg = self._config.providers.get("google")
+        if google_cfg is None or google_cfg.enabled:
+            registry.register("google", GoogleFreeTranslator(google_cfg or ProviderConfig(), http))
         return registry
 
     def _bind_hotkeys(self) -> None:
