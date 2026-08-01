@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from verba.config.schema import ProviderConfig
 from verba.models.translation import Lang, TranslationRequest, TranslationResult
 from verba.providers.base import BaseTranslator, ProviderMeta
-from verba.providers.errors import NetworkError, ProviderNotAvailable
+from verba.providers.errors import NetworkError, ProviderNotAvailable, QuotaExceeded
 from verba.utils.http import HttpError, HttpClient
 
 _URL = "https://fanyi-api.baidu.com/api/trans/vip/translate"
@@ -76,6 +76,13 @@ class BaiduTranslator(BaseTranslator):
         except HttpError as exc:
             raise NetworkError(f"baidu: {exc}") from exc
         entries = data.get("trans_result")
+        if entries is None and data.get("error_code") is not None:
+            code = str(data.get("error_code"))
+            if code == "52001":
+                raise NetworkError("baidu: api timeout (52001)")
+            if code in ("54003", "54004"):
+                raise QuotaExceeded(f"baidu: quota/frequency limit ({code})")
+            raise ProviderNotAvailable(f"baidu: api error {code}")
         if not isinstance(entries, list) or not entries:
             raise ProviderNotAvailable("baidu: malformed response payload")
         parts: list[str] = []

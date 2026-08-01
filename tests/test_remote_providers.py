@@ -180,3 +180,47 @@ def test_baidu_malformed_response_raises_not_available() -> None:
     with pytest.raises(ProviderError) as exc:
         provider.translate(TranslationRequest(text="x", target=Lang.ZH_HANS))
     assert isinstance(exc.value, ProviderNotAvailable)
+
+
+def test_baidu_error_code_52001_maps_to_network() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error_code": "52001", "error_msg": "TIMEOUT"})
+
+    transport = httpx.MockTransport(handler)
+    config = ProviderConfig(
+        api_key=SecretStr("secret"), options={"app_id": "app-1", "salt": "1"}
+    )
+    provider = BaiduTranslator(config, HttpClient(HttpOptions(), transport))
+    with pytest.raises(ProviderError) as exc:
+        provider.translate(TranslationRequest(text="x", target=Lang.ZH_HANS))
+    assert isinstance(exc.value, NetworkError)
+    assert not isinstance(exc.value, HttpError)
+
+
+def test_baidu_error_code_54003_maps_to_quota() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error_code": "54003", "error_msg": "UNPAID"})
+
+    transport = httpx.MockTransport(handler)
+    config = ProviderConfig(
+        api_key=SecretStr("secret"), options={"app_id": "app-1", "salt": "1"}
+    )
+    provider = BaiduTranslator(config, HttpClient(HttpOptions(), transport))
+    with pytest.raises(ProviderError) as exc:
+        provider.translate(TranslationRequest(text="x", target=Lang.ZH_HANS))
+    assert isinstance(exc.value, QuotaExceeded)
+
+
+def test_baidu_error_code_54005_maps_to_not_available() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error_code": "54005", "error_msg": "SIGN ERROR"})
+
+    transport = httpx.MockTransport(handler)
+    config = ProviderConfig(
+        api_key=SecretStr("secret"), options={"app_id": "app-1", "salt": "1"}
+    )
+    provider = BaiduTranslator(config, HttpClient(HttpOptions(), transport))
+    with pytest.raises(ProviderError) as exc:
+        provider.translate(TranslationRequest(text="x", target=Lang.ZH_HANS))
+    assert isinstance(exc.value, ProviderNotAvailable)
+    assert not isinstance(exc.value, HttpError)
