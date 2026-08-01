@@ -128,15 +128,22 @@ class VerbaApp(QObject):
     # -- wiring ---------------------------------------------------------------
 
     def _build_translators(self) -> ServiceRegistry[BaseTranslator]:
+        from verba.providers.baidu import BaiduTranslator
+        from verba.providers.deepl import DeepLTranslator
         from verba.providers.google import GoogleFreeTranslator
         from verba.utils.http import HttpClient
 
         registry: ServiceRegistry[BaseTranslator] = ServiceRegistry()
         registry.register("echo", EchoTranslator())
         http = HttpClient(self._config.http)
-        google_cfg = self._config.providers.get("google")
-        if google_cfg is None or google_cfg.enabled:
-            registry.register("google", GoogleFreeTranslator(google_cfg or ProviderConfig(), http))
+        for name, cls in (
+            ("google", GoogleFreeTranslator),
+            ("deepl", DeepLTranslator),
+            ("baidu", BaiduTranslator),
+        ):
+            cfg = self._config.providers.get(name)
+            if cfg is None or cfg.enabled:
+                registry.register(name, cls(cfg or ProviderConfig(), http))
         return registry
 
     def _bind_hotkeys(self) -> None:
