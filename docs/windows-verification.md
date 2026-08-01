@@ -31,4 +31,13 @@
 ## 已知限制
 - 目标应用以管理员权限运行 → 模拟复制无效(无解,Windows 权限模型)
 - 浮窗靠 Qt.Popup / Tool 窗口语义置顶,全屏或置顶场景下可能被遮挡;位置已按屏幕边界钳制,若真机出现越界需记录屏幕缩放(DpiAwareness)环境
-- 未实现能力(截图 OCR、流式 AI 翻译、PyInstaller 打包 exe、自动更新、i18n)见 [docs/roadmap.md](roadmap.md),不在本清单范围
+
+### 延期项(开发侧,验证时可复现但不在本次修复范围)
+- RegisterHotKey 未设置 ctypes argtypes(Windows 上 HWND 为 32 位,实际无截断风险,待硬化)
+- 部分热键绑定失败时会同时解绑两个热键(单个冲突影响另一个)
+- 翻译进行中再次划词:worker 单飞丢弃新请求,但 popup 显示时可能带旧原文(last_original 竞态,慢网络下可见)
+- HttpClient 无显式 close 路径(退出时资源释放依赖 GC)
+- popup_rect 对空屏幕列表无防护(正常 GUI 下 screens() 非空)
+- 设置保存对已有 TOML 注释会丢失(tomllib 写入特性,可接受)
+
+未实现能力(截图 OCR、流式 AI 翻译、PyInstaller 打包 exe、自动更新、i18n)见 [docs/roadmap.md](roadmap.md),不在本清单范围
