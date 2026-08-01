@@ -220,9 +220,7 @@ class VerbaApp(QObject):
         log.error("action %s failed: %s", action_name, exc)
 
     def _on_tray_settings(self) -> None:
-        from verba.desktop.windows.settings import (  # type: ignore[import-untyped]  # ignore: settings window ships in Task 10
-            SettingsWindow,
-        )
+        from verba.desktop.windows.settings import SettingsWindow
 
         self._settings_window = SettingsWindow(self._config, self.hotkeys)
         self._settings_window.config_changed.connect(self._reload_config)
