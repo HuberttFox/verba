@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
 
-from verba.config.schema import AppConfig
+from verba.config.schema import AppConfig, ProviderConfig
 from verba.core.registry import ServiceRegistry
 from verba.desktop.app import VerbaApp, describe_error, select_default_provider
 from verba.providers.base import BaseTranslator, ProviderMeta
@@ -18,6 +18,20 @@ from verba.providers.errors import (
     QuotaExceeded,
 )
 from verba.utils.http import HttpError
+
+
+def _echo_app(qtbot: QtBot) -> VerbaApp:
+    """VerbaApp with google/deepl/baidu disabled: echo-only, zero network."""
+    config = AppConfig(
+        providers={
+            "google": ProviderConfig(enabled=False),
+            "deepl": ProviderConfig(enabled=False),
+            "baidu": ProviderConfig(enabled=False),
+        }
+    )
+    app = VerbaApp(config)
+    qtbot.addWidget(app.popup)
+    return app
 
 
 class UnavailableTranslator(BaseTranslator):
@@ -52,24 +66,21 @@ def test_describe_error_maps_error_trees() -> None:
 
 
 def test_app_builds_and_tray_exists(qtbot: QtBot) -> None:
-    app = VerbaApp(AppConfig())
-    qtbot.addWidget(app.popup)
+    app = _echo_app(qtbot)
     assert app.tray is not None
     assert app.tray.contextMenu() is not None  # offscreen 无系统托盘,不能断言 isVisible
     assert app.input_window is not None
 
 
 def test_app_selection_flows_to_popup(qtbot: QtBot) -> None:
-    app = VerbaApp(AppConfig())
-    qtbot.addWidget(app.popup)
+    app = _echo_app(qtbot)
     app.selection_capturer.captured.emit("selected word")
     qtbot.waitUntil(lambda: app.popup.isVisible(), timeout=3000)
     assert "selected word" in app.popup.toPlainText()
 
 
 def test_app_input_flows_to_popup(qtbot: QtBot) -> None:
-    app = VerbaApp(AppConfig())
-    qtbot.addWidget(app.popup)
+    app = _echo_app(qtbot)
     app.input_window.setText("你好")
     app.input_window.submit()
     qtbot.waitUntil(lambda: app.popup.isVisible(), timeout=3000)
