@@ -5,8 +5,9 @@ import pytest
 
 from verba.config.schema import HttpOptions, ProviderConfig
 from verba.models.translation import Lang, TranslationRequest
+from verba.providers.errors import NetworkError, ProviderError, ProviderNotAvailable, QuotaExceeded
 from verba.providers.google import GoogleFreeTranslator, google_target_code
-from verba.utils.http import HttpClient
+from verba.utils.http import HttpError, HttpClient
 
 
 def test_google_target_code_mapping() -> None:
@@ -32,15 +33,50 @@ def test_google_translate_parses_response() -> None:
     assert result.provider == "google"
 
 
-def test_google_translate_http_error() -> None:
+def test_google_translate_http_error_maps_to_network() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={})
 
     transport = httpx.MockTransport(handler)
     provider = GoogleFreeTranslator(ProviderConfig(), HttpClient(HttpOptions(), transport))
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(ProviderError) as exc:
         provider.translate(TranslationRequest(text="x", target=Lang.ZH_HANS))
-    assert isinstance(exc.value, httpx.HTTPStatusError) or "503" in str(exc.value)
+    assert isinstance(exc.value, NetworkError)
+    assert not isinstance(exc.value, HttpError)
+    assert not isinstance(exc.value, httpx.HTTPStatusError)
+
+
+def test_google_translate_quota_maps_to_quota_exceeded() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={})
+
+    transport = httpx.MockTransport(handler)
+    provider = GoogleFreeTranslator(ProviderConfig(), HttpClient(HttpOptions(), transport))
+    with pytest.raises(ProviderError) as exc:
+        provider.translate(TranslationRequest(text="x", target=Lang.ZH_HANS))
+    assert isinstance(exc.value, QuotaExceeded)
+
+
+def test_google_translate_empty_body_raises_not_available() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    transport = httpx.MockTransport(handler)
+    provider = GoogleFreeTranslator(ProviderConfig(), HttpClient(HttpOptions(), transport))
+    with pytest.raises(ProviderError) as exc:
+        provider.translate(TranslationRequest(text="x", target=Lang.ZH_HANS))
+    assert isinstance(exc.value, ProviderNotAvailable)
+
+
+def test_google_translate_null_first_segment_raises_not_available() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[None, "en"])
+
+    transport = httpx.MockTransport(handler)
+    provider = GoogleFreeTranslator(ProviderConfig(), HttpClient(HttpOptions(), transport))
+    with pytest.raises(ProviderError) as exc:
+        provider.translate(TranslationRequest(text="x", target=Lang.ZH_HANS))
+    assert isinstance(exc.value, ProviderNotAvailable)
 
 
 def test_google_maps_zh_tw_detection() -> None:

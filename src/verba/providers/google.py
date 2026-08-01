@@ -8,7 +8,8 @@ from __future__ import annotations
 from verba.config.schema import HttpOptions, ProviderConfig
 from verba.models.translation import Lang, TranslationRequest, TranslationResult
 from verba.providers.base import BaseTranslator, ProviderMeta
-from verba.utils.http import HttpClient
+from verba.providers.errors import NetworkError, ProviderNotAvailable
+from verba.utils.http import HttpError, HttpClient
 
 _URL = "https://translate.googleapis.com/translate_a/single"
 
@@ -55,10 +56,17 @@ class GoogleFreeTranslator(BaseTranslator):
             "dt": "t",
             "q": request.text,
         }
-        data = self._http.get_json_any(_URL, params=params)
+        try:
+            data = self._http.get_json_any(_URL, params=params)
+        except HttpError as exc:
+            raise NetworkError(f"google: {exc}") from exc
+        if not isinstance(data, list) or not data or not isinstance(data[0], list):
+            raise ProviderNotAvailable("google: malformed response payload")
         segments = data[0]
         parts: list[str] = []
         for seg in segments:
+            if not isinstance(seg, list) or not seg:
+                raise ProviderNotAvailable("google: malformed response payload")
             parts.append(str(seg[0]))
         translated = "".join(parts)
         detected_raw = data[2] if len(data) > 2 else None
