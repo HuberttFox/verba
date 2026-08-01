@@ -3,7 +3,6 @@ setlocal
 cd /d "%~dp0"
 
 set PYTHON=%~dp0venv\Scripts\python.exe
-set PYINSTALLER=%~dp0venv\Scripts\pyinstaller.exe
 set SEVENZIP=D:\Program Files\7-Zip\7z.exe
 set ISCC=F:\InnoSetup7\ISCC.exe
 set APP_VERSION=0.1.0
@@ -15,7 +14,7 @@ if not exist "%PYTHON%" (
 )
 
 echo [2/4] Building with PyInstaller...
-"%PYINSTALLER%" verba.spec --distpath dist --workpath work
+"%PYTHON%" -m PyInstaller verba.spec --distpath dist --workpath work -y
 if errorlevel 1 exit /b 1
 
 echo [3/4] Packing portable zip...
