@@ -58,6 +58,10 @@ class ResultPopup(QWidget):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._auto_close)
 
+        self._copy_timer = QTimer(self)
+        self._copy_timer.setSingleShot(True)
+        self._copy_timer.timeout.connect(self._restore_copy_label)
+
         self.setWindowFlags(
             Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
         )
@@ -136,7 +140,7 @@ class ResultPopup(QWidget):
 
         QApplication.clipboard().setText(self._result.text)
         self._copy_button.setText("已复制")
-        QTimer.singleShot(1200, lambda: self._copy_button.setText("复制"))
+        self._copy_timer.start(1200)
 
     def toggle_pin(self) -> None:
         self._pinned = not self._pinned
@@ -170,6 +174,9 @@ class ResultPopup(QWidget):
     def _auto_close(self) -> None:
         if not self._pinned:
             self.hide()
+
+    def _restore_copy_label(self) -> None:
+        self._copy_button.setText("复制")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self._options.click_to_copy and event.button() == Qt.MouseButton.LeftButton:

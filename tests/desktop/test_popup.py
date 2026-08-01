@@ -64,6 +64,25 @@ def test_popup_renders_result_and_copies(qtbot: QtBot) -> None:
     assert clip == "你好,世界"
 
 
+def test_copy_label_reverts_after_delay(qtbot: QtBot) -> None:
+    popup = ResultPopup(DesktopOptions())
+    qtbot.addWidget(popup)
+    popup.show_result(make_result(), QPoint(100, 100))
+    popup.copy_translation()
+    assert popup._copy_button.text() == "已复制"
+    qtbot.wait(1300)
+    assert popup._copy_button.text() == "复制"
+
+
+def test_copy_timer_does_not_outlive_popup(qtbot: QtBot) -> None:
+    popup = ResultPopup(DesktopOptions())
+    qtbot.addWidget(popup)
+    popup.show_result(make_result(), QPoint(100, 100))
+    popup.copy_translation()
+    popup.close()
+    qtbot.wait(1300)
+
+
 class _WideContentPopup(ResultPopup):
     """Simulates content forcing a wider-than-cap layout (offscreen-safe)."""
 
